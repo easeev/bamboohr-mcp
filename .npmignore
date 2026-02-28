@@ -1,0 +1,8 @@
+src/
+.env*
+.gitignore
+jest.config.ts
+tsconfig.json
+coverage/
+.DS_Store
+*.log
