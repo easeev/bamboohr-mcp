@@ -22,7 +22,10 @@ export function registerAnalyticsTools(server: McpServer): void {
     {},
     async () => {
       try {
-        const datasets = await bambooGet<Dataset[]>('/datasets');
+        const response = await bambooGet<Dataset[] | { datasets?: Dataset[] }>('/datasets');
+        const datasets: Dataset[] = Array.isArray(response)
+          ? response
+          : response?.datasets ?? [];
         return result(`Available Datasets:\n\n${formatDatasets(datasets)}`);
       } catch (error) {
         return result(formatErrorForUser(error), true);
@@ -39,7 +42,10 @@ export function registerAnalyticsTools(server: McpServer): void {
     async ({ datasetId }: { datasetId: string }) => {
       try {
         const id = datasetIdSchema.parse(datasetId);
-        const fields = await bambooGet<DatasetField[]>(`/datasets/${id}/fields`);
+        const response = await bambooGet<DatasetField[] | { fields?: DatasetField[] }>(`/datasets/${id}/fields`);
+        const fields: DatasetField[] = Array.isArray(response)
+          ? response
+          : response?.fields ?? [];
         return result(`Fields for dataset "${id}":\n\n${formatDatasetFields(fields)}`);
       } catch (error) {
         return result(formatErrorForUser(error), true);
