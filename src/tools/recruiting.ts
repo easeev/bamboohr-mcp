@@ -119,7 +119,7 @@ export function registerRecruitingTools(server: McpServer): void {
     'get-applications',
     'List job applications with filtering. Filter by jobId, status, search string, or date range.',
     {
-      jobId: z.string().optional().describe('Filter by specific job opening ID'),
+      jobId: z.string().regex(/^\d+$/, 'Job ID must be numeric').optional().describe('Filter by specific job opening ID'),
       applicationStatusId: z.string().optional().describe('Filter by status ID(s), comma-separated (e.g., "1,2,3")'),
       applicationStatus: z.string().optional().describe('Filter by status group: ALL, ALL_ACTIVE, NEW, ACTIVE, INACTIVE, HIRED'),
       jobStatusGroups: z.string().optional().describe('Filter job status: ALL, DRAFT_AND_OPEN, Open, Filled, Draft, Deleted, On Hold, Canceled'),
@@ -127,7 +127,7 @@ export function registerRecruitingTools(server: McpServer): void {
       sortBy: z.string().optional().describe('Sort by: first_name, job_title, rating, phone, status, last_updated, created_date'),
       sortOrder: z.string().optional().describe('Sort order: ASC or DESC'),
       newSince: z.string().optional().describe('Only applications after this UTC timestamp (format: Y-m-d H:i:s)'),
-      page: z.string().optional().describe('Page number for pagination (default: 1)'),
+      page: z.string().regex(/^\d+$/, 'Page must be numeric').optional().describe('Page number for pagination (default: 1)'),
     },
     async ({ jobId, applicationStatusId, applicationStatus, jobStatusGroups, searchString, sortBy, sortOrder, newSince, page }: {
       jobId?: string;
@@ -175,7 +175,7 @@ export function registerRecruitingTools(server: McpServer): void {
     'get-application-details',
     'Get full details for a specific job application including questions, answers, attachments, and status history',
     {
-      applicationId: z.string().describe('The application ID (numeric)'),
+      applicationId: z.string().regex(/^\d+$/, 'Application ID must be numeric').describe('The application ID (numeric)'),
     },
     async ({ applicationId }: { applicationId: string }) => {
       try {
@@ -192,8 +192,8 @@ export function registerRecruitingTools(server: McpServer): void {
     'update-application-status',
     'Change the status of a job application (e.g., move to Interview, Rejected, Hired). Get valid status IDs from get-applicant-statuses.',
     {
-      applicationId: z.string().describe('The application ID (numeric)'),
-      statusId: z.string().describe('The new status ID (numeric). Use get-applicant-statuses to see valid IDs.'),
+      applicationId: z.string().regex(/^\d+$/, 'Application ID must be numeric').describe('The application ID (numeric)'),
+      statusId: z.string().regex(/^\d+$/, 'Status ID must be numeric').describe('The new status ID (numeric). Use get-applicant-statuses to see valid IDs.'),
     },
     async ({ applicationId, statusId }: { applicationId: string; statusId: string }) => {
       try {
@@ -214,7 +214,7 @@ export function registerRecruitingTools(server: McpServer): void {
     'add-application-comment',
     'Add a comment to a job application for documentation (e.g., screening notes, rejection reasons).',
     {
-      applicationId: z.string().describe('The application ID (numeric)'),
+      applicationId: z.string().regex(/^\d+$/, 'Application ID must be numeric').describe('The application ID (numeric)'),
       comment: z.string().describe('The comment text'),
       type: z.string().optional().describe('Comment type: comment (default), note, or phone_call'),
     },

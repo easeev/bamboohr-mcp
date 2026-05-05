@@ -218,9 +218,22 @@ export async function bambooDownloadFile(
   params?: Record<string, unknown>
 ): Promise<FileDownloadResult> {
   const client = getClient();
+  const config = getConfig();
 
-  // Determine if it's a full URL or relative path
-  const url = path.startsWith('http') ? path : `${client.defaults.baseURL}${path}`;
+  // Validate and construct URL - prevent SSRF by only allowing BambooHR URLs
+  let url: string;
+  if (path.startsWith('http')) {
+    // Validate that the URL belongs to the company's BambooHR domain
+    const allowedPrefix = `https://${config.companyDomain}.bamboohr.com`;
+    const apiPrefix = `https://api.bamboohr.com/api/gateway.php/${config.companyDomain}`;
+    if (!path.startsWith(allowedPrefix) && !path.startsWith(apiPrefix)) {
+      throw new Error(`Invalid URL: must be a BambooHR URL for domain ${config.companyDomain}`);
+    }
+    url = path;
+  } else {
+    // Relative path - use base URL
+    url = `${client.defaults.baseURL}${path}`;
+  }
 
   const response = await client.get<ArrayBuffer>(url, {
     params,
