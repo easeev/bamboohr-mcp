@@ -207,6 +207,46 @@ export async function bambooPut<T>(
   return response.data;
 }
 
+export interface FileDownloadResult {
+  data: ArrayBuffer;
+  contentType: string;
+  filename: string;
+}
+
+export async function bambooDownloadFile(
+  path: string,
+  params?: Record<string, unknown>
+): Promise<FileDownloadResult> {
+  const client = getClient();
+
+  // Determine if it's a full URL or relative path
+  const url = path.startsWith('http') ? path : `${client.defaults.baseURL}${path}`;
+
+  const response = await client.get<ArrayBuffer>(url, {
+    params,
+    responseType: 'arraybuffer',
+    headers: {
+      Accept: '*/*',
+    },
+  });
+
+  const contentType = String(response.headers['content-type'] || 'application/octet-stream');
+  const contentDisposition = String(response.headers['content-disposition'] || '');
+
+  // Extract filename from Content-Disposition header
+  let filename = 'download';
+  const match = contentDisposition.match(/filename="?([^"]+)"?/);
+  if (match) {
+    filename = match[1];
+  }
+
+  return {
+    data: response.data,
+    contentType,
+    filename,
+  };
+}
+
 // Reset for testing
 export function _resetForTesting(): void {
   clientInstance = null;
