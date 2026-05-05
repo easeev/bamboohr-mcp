@@ -246,12 +246,18 @@ export async function bambooDownloadFile(
   } else {
     // Relative path - only allow attachment/applicant_tracking endpoints
     // Prevent using this as a generic authenticated GET against any API path
+    // Reject path traversal attempts (e.g., /applicant_tracking/../../employees/directory)
+    if (path.includes('..')) {
+      throw new Error('Invalid path: path traversal not allowed');
+    }
+    // Normalize multiple slashes and current dir segments
+    const normalizedPath = path.replace(/\/+/g, '/').replace(/\/\.\//g, '/');
     const allowedPathPrefixes = ['/applicant_tracking/', '/attachments/'];
-    const isAllowedPath = allowedPathPrefixes.some(prefix => path.startsWith(prefix));
+    const isAllowedPath = allowedPathPrefixes.some(prefix => normalizedPath.startsWith(prefix));
     if (!isAllowedPath) {
       throw new Error(`Invalid path: only attachment and applicant tracking paths are allowed`);
     }
-    url = `${client.defaults.baseURL}${path}`;
+    url = `${client.defaults.baseURL}${normalizedPath}`;
   }
 
   const response = await client.get<ArrayBuffer>(url, {
