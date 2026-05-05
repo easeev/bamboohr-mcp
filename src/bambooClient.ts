@@ -223,11 +223,19 @@ export async function bambooDownloadFile(
   // Validate and construct URL - prevent SSRF by only allowing BambooHR URLs
   let url: string;
   if (path.startsWith('http')) {
-    // Validate that the URL belongs to the company's BambooHR domain
-    const allowedPrefix = `https://${config.companyDomain}.bamboohr.com`;
-    const apiPrefix = `https://api.bamboohr.com/api/gateway.php/${config.companyDomain}`;
-    if (!path.startsWith(allowedPrefix) && !path.startsWith(apiPrefix)) {
-      throw new Error(`Invalid URL: must be a BambooHR URL for domain ${config.companyDomain}`);
+    // Parse URL to extract hostname and prevent bypass attacks like:
+    // https://company.bamboohr.com@attacker.example/file
+    const parsedUrl = new URL(path);
+    const hostname = parsedUrl.hostname.toLowerCase();
+
+    // Allow only BambooHR hostnames for the configured company domain
+    const allowedHostnames = [
+      `${config.companyDomain.toLowerCase()}.bamboohr.com`,
+      'api.bamboohr.com',
+    ];
+
+    if (!allowedHostnames.includes(hostname)) {
+      throw new Error(`Invalid URL: hostname ${hostname} is not allowed. Must be a BambooHR URL for domain ${config.companyDomain}`);
     }
     url = path;
   } else {
