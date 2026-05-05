@@ -228,6 +228,11 @@ export async function bambooDownloadFile(
     const parsedUrl = new URL(path);
     const hostname = parsedUrl.hostname.toLowerCase();
 
+    // Require HTTPS to prevent credential exposure over HTTP
+    if (parsedUrl.protocol !== 'https:') {
+      throw new Error('Invalid URL: only HTTPS URLs are allowed');
+    }
+
     // Allow only BambooHR hostnames for the configured company domain
     const allowedHostnames = [
       `${config.companyDomain.toLowerCase()}.bamboohr.com`,
@@ -239,7 +244,13 @@ export async function bambooDownloadFile(
     }
     url = path;
   } else {
-    // Relative path - use base URL
+    // Relative path - only allow attachment/applicant_tracking endpoints
+    // Prevent using this as a generic authenticated GET against any API path
+    const allowedPathPrefixes = ['/applicant_tracking/', '/attachments/'];
+    const isAllowedPath = allowedPathPrefixes.some(prefix => path.startsWith(prefix));
+    if (!isAllowedPath) {
+      throw new Error(`Invalid path: only attachment and applicant tracking paths are allowed`);
+    }
     url = `${client.defaults.baseURL}${path}`;
   }
 
