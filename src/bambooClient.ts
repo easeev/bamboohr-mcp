@@ -207,6 +207,84 @@ export async function bambooPut<T>(
   return response.data;
 }
 
+export interface FileDownloadResult {
+  data: ArrayBuffer;
+  contentType: string;
+  filename: string;
+}
+
+export async function bambooDownloadFile(
+  path: string,
+  params?: Record<string, unknown>
+): Promise<FileDownloadResult> {
+  const client = getClient();
+  const config = getConfig();
+
+  // Validate and construct URL - prevent SSRF by only allowing BambooHR URLs
+  let url: string;
+  if (path.startsWith('http')) {
+    // Parse URL to extract hostname and prevent bypass attacks like:
+    // https://company.bamboohr.com@attacker.example/file
+    const parsedUrl = new URL(path);
+    const hostname = parsedUrl.hostname.toLowerCase();
+
+    // Require HTTPS to prevent credential exposure over HTTP
+    if (parsedUrl.protocol !== 'https:') {
+      throw new Error('Invalid URL: only HTTPS URLs are allowed');
+    }
+
+    // Allow only BambooHR hostnames for the configured company domain
+    const allowedHostnames = [
+      `${config.companyDomain.toLowerCase()}.bamboohr.com`,
+      'api.bamboohr.com',
+    ];
+
+    if (!allowedHostnames.includes(hostname)) {
+      throw new Error(`Invalid URL: hostname ${hostname} is not allowed. Must be a BambooHR URL for domain ${config.companyDomain}`);
+    }
+    url = path;
+  } else {
+    // Relative path - only allow attachment/applicant_tracking endpoints
+    // Prevent using this as a generic authenticated GET against any API path
+    // Reject path traversal attempts (e.g., /applicant_tracking/../../employees/directory)
+    if (path.includes('..')) {
+      throw new Error('Invalid path: path traversal not allowed');
+    }
+    // Normalize multiple slashes and current dir segments
+    const normalizedPath = path.replace(/\/+/g, '/').replace(/\/\.\//g, '/');
+    const allowedPathPrefixes = ['/applicant_tracking/', '/attachments/'];
+    const isAllowedPath = allowedPathPrefixes.some(prefix => normalizedPath.startsWith(prefix));
+    if (!isAllowedPath) {
+      throw new Error(`Invalid path: only attachment and applicant tracking paths are allowed`);
+    }
+    url = `${client.defaults.baseURL}${normalizedPath}`;
+  }
+
+  const response = await client.get<ArrayBuffer>(url, {
+    params,
+    responseType: 'arraybuffer',
+    headers: {
+      Accept: '*/*',
+    },
+  });
+
+  const contentType = String(response.headers['content-type'] || 'application/octet-stream');
+  const contentDisposition = String(response.headers['content-disposition'] || '');
+
+  // Extract filename from Content-Disposition header
+  let filename = 'download';
+  const match = contentDisposition.match(/filename="?([^"]+)"?/);
+  if (match) {
+    filename = match[1];
+  }
+
+  return {
+    data: response.data,
+    contentType,
+    filename,
+  };
+}
+
 // Reset for testing
 export function _resetForTesting(): void {
   clientInstance = null;

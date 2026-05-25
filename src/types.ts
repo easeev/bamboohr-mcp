@@ -128,6 +128,137 @@ export interface EmployeeGoal {
   [key: string]: unknown;
 }
 
+// Recruiting types
+export interface Application {
+  id: number;
+  appliedDate: string;
+  status: { id: number; label: string };
+  rating: number | null;
+  applicant: {
+    id: number;
+    firstName: string;
+    lastName: string;
+    email: string;
+    source?: string;
+    avatar?: string | null;
+  };
+  job: {
+    id: number;
+    title: { id: number | null; label: string };
+  };
+}
+
+export interface ApplicationDetails {
+  id: number;
+  appliedDate: string;
+  status: {
+    id: number;
+    label: string;
+    dateChanged?: string;
+    changedByUser?: {
+      id: number;
+      firstName: string;
+      lastName: string;
+      avatar?: string | null;
+      jobTitle?: { id: number | null; label: string | null };
+    } | null;
+  };
+  rating: number | null;
+  resumeFileId: number | null;
+  coverLetterFileId: number | null;
+  attachmentCount: number | null;
+  attachments?: Array<{
+    id: number;
+    name: string;
+    fileUrl: string;
+  }> | null;
+  movedTo?: unknown[] | null;
+  movedFrom?: unknown[] | null;
+  alsoConsideredForCount: number;
+  duplicateApplicationCount: number;
+  referredBy: string | null;
+  desiredSalary: string | null;
+  commentCount: number;
+  emailCount: number;
+  eventCount: number;
+  questionsAndAnswers: Array<{
+    question: { id: number; label: string };
+    answer: { id: number; label: string } | null;
+    hasRevisions?: boolean | null;
+    isArchived?: boolean | null;
+    archivedDate?: string | null;
+    editedDate?: string | null;
+    editedEndDate?: string | null;
+  }>;
+  applicationReferences: string | null;
+  applicant: {
+    id: number;
+    firstName: string;
+    lastName: string;
+    email: string;
+    phoneNumber: string | null;
+    avatar: string | null;
+    source: string | null;
+    twitterUsername: string | null;
+    address: {
+      addressLine1: string | null;
+      addressLine2: string | null;
+      city: string | null;
+      state: string | null;
+      zipcode: string | null;
+      country: string | null;
+    } | null;
+    linkedinUrl: string | null;
+    websiteUrl: string | null;
+    availableStartDate: string | null;
+    education: {
+      institution: string | null;
+      level: { id: number; label: string } | null;
+    } | null;
+  };
+  job: {
+    id: number;
+    title: { id: number | null; label: string };
+    hiringLead?: {
+      employeeId: number;
+      firstName: string;
+      lastName: string;
+      avatar: string | null;
+      jobTitle: { id: number | null; label: string | null } | null;
+    } | null;
+  };
+}
+
+export interface JobSummary {
+  id: number;
+  title: { id: number | null; label: string };
+  postedDate: string;
+  location: { id: number; label: string; address: unknown } | null;
+  department: { id: number; label: string } | null;
+  status: { id: number; label: string };
+  hiringLead: {
+    employeeId: number;
+    firstName: string;
+    lastName: string;
+    avatar: string | null;
+    jobTitle: unknown;
+  } | null;
+  newApplicantsCount: number;
+  activeApplicantsCount: number;
+  totalApplicantsCount: number;
+  postingUrl: string | null;
+}
+
+export interface ApplicantStatus {
+  id: string;
+  code: string | null;
+  name: string;
+  translatedName: string;
+  description: string | null;
+  enabled: boolean;
+  manageable: boolean;
+}
+
 // Tool handler result — index signature required by MCP SDK
 export interface ToolResult {
   [key: string]: unknown;
