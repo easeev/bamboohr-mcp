@@ -205,21 +205,136 @@ describe('recruiting tools', () => {
     });
   });
 
-  describe('download-attachment', () => {
-    it('downloads attachment and returns base64', async () => {
-      const mockData = new ArrayBuffer(1024);
-      mockedClient.bambooDownloadFile.mockResolvedValueOnce({
-        data: mockData,
-        contentType: 'application/pdf',
-        filename: 'resume.pdf',
+  describe('get-application-comments', () => {
+    it('returns only comment timeline entries from BambooHR topLevel response', async () => {
+      mockedClient.bambooGet.mockResolvedValueOnce([
+        {
+          topLevel: {
+            type: {
+              type: 'comment',
+              id: 11053,
+              authorUser: { id: 2385, preferredName: 'Eugene Aseev' },
+              createdDatetime: '2026-06-23T06:20:28+00:00',
+            },
+            comment: 'Strong technical fit.',
+            ymdt: '2026-06-23T06:20:28+00:00',
+          },
+        },
+        {
+          topLevel: {
+            type: {
+              type: 'status',
+              id: 86741,
+              user: { id: 2753, preferredName: 'Ilias Farkhutdinov' },
+              ymdt: '2026-06-18T15:41:26+00:00',
+            },
+            author: '<span data-comment-employee-name="Ilias Farkhutdinov">Ilias</span>',
+            ymdt: '2026-06-18T15:41:26+00:00',
+          },
+        },
+        {
+          topLevel: {
+            type: {
+              type: 'comment',
+              id: 11022,
+              authorUser: { id: 2750, preferredName: 'Tanya Chenushkina' },
+              createdDatetime: '2026-06-15T11:25:42+00:00',
+            },
+            comment: 'Move to technical interview.',
+            ymdt: '2026-06-15T11:25:42+00:00',
+          },
+        },
+      ]);
+
+      const handler = handlers.get('get-application-comments')!;
+      const result = await handler({ applicationId: '41021' });
+
+      expect(result.content[0].text).toContain('Comments for application 41021 (2)');
+      expect(result.content[0].text).toContain('**[comment #11053]** Eugene Aseev - 2026-06-23T06:20:28.000Z');
+      expect(result.content[0].text).toContain('Strong technical fit.');
+      expect(result.content[0].text).toContain('Tanya Chenushkina');
+      expect(result.content[0].text).not.toContain('86741');
+      expect(result.content[0].text).not.toContain('DEBUG raw response');
+    });
+
+    it('supports flat comment responses', async () => {
+      mockedClient.bambooGet.mockResolvedValueOnce([
+        {
+          id: 300,
+          type: 'comment',
+          author: { firstName: 'Jane', lastName: 'Doe' },
+          createdAt: '2026-06-01T00:00:00Z',
+          body: 'Flat response comment.',
+        },
+      ]);
+
+      const handler = handlers.get('get-application-comments')!;
+      const result = await handler({ applicationId: '101' });
+
+      expect(result.content[0].text).toContain('**[comment #300]** Jane Doe - 2026-06-01T00:00:00.000Z');
+      expect(result.content[0].text).toContain('Flat response comment.');
+    });
+
+    it('handles unexpected non-array comment responses as empty', async () => {
+      mockedClient.bambooGet.mockResolvedValueOnce({ comments: [] });
+
+      const handler = handlers.get('get-application-comments')!;
+      const result = await handler({ applicationId: '101' });
+
+      expect(result.content[0].text).toContain('No comments found');
+      expect(result.isError).toBeUndefined();
+    });
+  });
+
+  describe('get-attachment-url', () => {
+    beforeEach(() => {
+      mockedClient.resolveBambooFileUrl.mockImplementation((path: string) => {
+        if (path.startsWith('http')) return path;
+        return `https://api.bamboohr.com/api/gateway.php/testcompany/v1${path}`;
+      });
+    });
+
+    it('returns URL for fileUrl input', async () => {
+      const handler = handlers.get('get-attachment-url')!;
+      const result = await handler({ fileUrl: 'https://company.bamboohr.com/attachments/123' });
+      expect(result.content[0].text).toContain('https://company.bamboohr.com/attachments/123');
+      expect(result.content[0].text).toContain('curl');
+      expect(mockedClient.resolveBambooFileUrl).toHaveBeenCalledWith('https://company.bamboohr.com/attachments/123');
+    });
+
+    it('constructs URL from resumeFileId', async () => {
+      const handler = handlers.get('get-attachment-url')!;
+      const result = await handler({ resumeFileId: '456' });
+      expect(result.content[0].text).toContain('/files/456');
+      expect(result.content[0].text).toContain('curl');
+      expect(result.content[0].text).toContain('-o resume.pdf');
+      expect(mockedClient.resolveBambooFileUrl).toHaveBeenCalledWith('/files/456');
+    });
+
+    it('uses cover letter filename for coverLetterFileId', async () => {
+      const handler = handlers.get('get-attachment-url')!;
+      const result = await handler({ coverLetterFileId: '789' });
+      expect(result.content[0].text).toContain('/files/789');
+      expect(result.content[0].text).toContain('-o cover_letter.pdf');
+      expect(mockedClient.resolveBambooFileUrl).toHaveBeenCalledWith('/files/789');
+    });
+
+    it('returns error when no input provided', async () => {
+      const handler = handlers.get('get-attachment-url')!;
+      const result = await handler({});
+      expect(result.isError).toBe(true);
+    });
+
+    it('returns validation errors from invalid attachment URLs', async () => {
+      mockedClient.resolveBambooFileUrl.mockImplementationOnce(() => {
+        throw new Error('Invalid URL: hostname evil.example is not allowed');
       });
 
-      const handler = handlers.get('download-attachment')!;
-      const result = await handler({ fileUrl: 'https://company.bamboohr.com/attachments/123' });
-      expect(result.content[0].text).toContain('resume.pdf');
-      expect(result.content[0].text).toContain('1 KB');
-      expect(result.content[0].text).toContain('application/pdf');
-      expect(mockedClient.bambooDownloadFile).toHaveBeenCalledWith('https://company.bamboohr.com/attachments/123');
+      const handler = handlers.get('get-attachment-url')!;
+      const result = await handler({ fileUrl: 'https://evil.example/attachments/123' });
+
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain('Invalid URL');
     });
   });
 

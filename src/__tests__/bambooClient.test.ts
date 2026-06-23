@@ -1,5 +1,5 @@
 import axios, { AxiosError, AxiosHeaders } from 'axios';
-import { bambooGet, bambooPost, bambooPut, clearCache, getCacheKey, _resetForTesting } from '../bambooClient';
+import { bambooGet, bambooPost, bambooPut, clearCache, getCacheKey, resolveBambooFileUrl, _resetForTesting } from '../bambooClient';
 
 jest.mock('axios');
 
@@ -251,6 +251,76 @@ describe('bambooClient', () => {
     it('handles no params', () => {
       const key = getCacheKey('GET', '/test');
       expect(key).toBe('GET:/test:');
+    });
+  });
+
+  describe('resolveBambooFileUrl', () => {
+    it('allows configured BambooHR attachment URLs', () => {
+      const url = resolveBambooFileUrl('https://testco.bamboohr.com/attachments/123');
+      expect(url).toBe('https://testco.bamboohr.com/attachments/123');
+    });
+
+    it('allows configured BambooHR API file URLs', () => {
+      const url = resolveBambooFileUrl('https://api.bamboohr.com/api/gateway.php/testco/v1/files/456');
+      expect(url).toBe('https://api.bamboohr.com/api/gateway.php/testco/v1/files/456');
+    });
+
+    it('allows relative file URLs for recruiting attachments', () => {
+      const url = resolveBambooFileUrl('/files/456');
+      expect(url).toBe('https://api.bamboohr.com/api/gateway.php/testco/v1/files/456');
+    });
+
+    it('rejects non-BambooHR URLs', () => {
+      expect(() => resolveBambooFileUrl('https://example.com/attachments/123')).toThrow('hostname example.com is not allowed');
+    });
+
+    it('rejects HTTP URLs', () => {
+      expect(() => resolveBambooFileUrl('http://testco.bamboohr.com/attachments/123')).toThrow('only HTTPS URLs are allowed');
+    });
+
+    it('rejects disallowed relative paths', () => {
+      expect(() => resolveBambooFileUrl('/employees/directory')).toThrow('only attachment, file, and applicant tracking paths are allowed');
+    });
+
+    it('rejects disallowed absolute company paths', () => {
+      expect(() => resolveBambooFileUrl('https://testco.bamboohr.com/employees/directory')).toThrow('only attachment, file, and applicant tracking paths are allowed');
+    });
+
+    it('rejects disallowed absolute API paths', () => {
+      expect(() => resolveBambooFileUrl('https://api.bamboohr.com/api/gateway.php/testco/v1/employees/directory')).toThrow('only attachment, file, and applicant tracking paths are allowed');
+    });
+
+    it('rejects absolute API paths for another BambooHR company', () => {
+      expect(() => resolveBambooFileUrl('https://api.bamboohr.com/api/gateway.php/otherco/v1/files/456')).toThrow('API path is not allowed for this BambooHR company');
+    });
+
+    it('rejects literal relative path traversal', () => {
+      expect(() => resolveBambooFileUrl('/applicant_tracking/../../employees/directory')).toThrow('path traversal not allowed');
+    });
+
+    it('rejects URL-encoded relative path traversal', () => {
+      expect(() => resolveBambooFileUrl('/applicant_tracking/%2e%2e/employees/directory')).toThrow('path traversal not allowed');
+      expect(() => resolveBambooFileUrl('/applicant_tracking/.%2e/employees/directory')).toThrow('path traversal not allowed');
+      expect(() => resolveBambooFileUrl('/applicant_tracking/%2e./employees/directory')).toThrow('path traversal not allowed');
+    });
+
+    it('rejects double-encoded relative path traversal', () => {
+      expect(() => resolveBambooFileUrl('/files/%252e%252e/employees/directory')).toThrow('path traversal not allowed');
+      expect(() => resolveBambooFileUrl('/applicant_tracking/%252e%252e/employees/directory')).toThrow('path traversal not allowed');
+    });
+
+    it('rejects repeatedly encoded relative path traversal', () => {
+      expect(() => resolveBambooFileUrl('/files/%25252e%25252e/employees/directory')).toThrow('path traversal not allowed');
+      expect(() => resolveBambooFileUrl('/applicant_tracking/%2525252e%2525252e/employees/directory')).toThrow('path traversal not allowed');
+    });
+
+    it('rejects encoded path separators in relative paths', () => {
+      expect(() => resolveBambooFileUrl('/applicant_tracking%2f..%2femployees/directory')).toThrow('encoded path separators not allowed');
+      expect(() => resolveBambooFileUrl('/applicant_tracking%252f..%252femployees/directory')).toThrow('path traversal not allowed');
+    });
+
+    it('rejects malformed URL encoding in relative paths', () => {
+      expect(() => resolveBambooFileUrl('/files/%')).toThrow('malformed URL encoding');
     });
   });
 
