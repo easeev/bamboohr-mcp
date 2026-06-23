@@ -1,6 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { bambooGet, bambooPost, bambooDownloadFile } from '../bambooClient.js';
+import { bambooGet, bambooPost, resolveBambooFileUrl } from '../bambooClient.js';
 import { formatErrorForUser } from '../errors.js';
 import {
   Application,
@@ -16,6 +16,144 @@ function result(text: string, isError?: boolean) {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function reg(server: McpServer, name: string, description: string, params: any, handler: any) {
   server.tool(name, description, params, handler);
+}
+
+type UnknownRecord = Record<string, unknown>;
+
+interface FormattedApplicationComment {
+  id?: string;
+  type: string;
+  author: string;
+  date: string;
+  text: string;
+}
+
+function asRecord(value: unknown): UnknownRecord | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as UnknownRecord
+    : null;
+}
+
+function asString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function stripHtml(value: string): string {
+  return value
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+function authorFromHtml(value: string): string | undefined {
+  const attrMatch = value.match(/data-comment-employee-name="([^"]+)"/);
+  if (attrMatch?.[1]) return stripHtml(attrMatch[1]);
+
+  const stripped = stripHtml(value);
+  return stripped || undefined;
+}
+
+function formatDate(value: string | undefined): string {
+  if (!value) return '';
+
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toISOString();
+}
+
+function userDisplayName(value: unknown): string | undefined {
+  const user = asRecord(value);
+  if (!user) return undefined;
+
+  const fullName = asString(user.name) || asString(user.displayName) || asString(user.preferredName);
+  if (fullName) return fullName;
+
+  const firstName = asString(user.firstName);
+  const lastName = asString(user.lastName);
+  return [firstName, lastName].filter(Boolean).join(' ') || undefined;
+}
+
+function formatApplicationComment(entry: UnknownRecord): FormattedApplicationComment | null {
+  const topLevel = asRecord(entry.topLevel);
+  const source = topLevel || entry;
+  const typeInfo = asRecord(source.type);
+
+  const type = (asString(typeInfo?.type) || asString(source.type) || asString(entry.type) || 'comment').toLowerCase();
+  const text = asString(source.comment)
+    || asString(source.text)
+    || asString(source.body)
+    || asString(source.message)
+    || asString(source.note)
+    || asString(entry.comment)
+    || asString(entry.text)
+    || asString(entry.body)
+    || asString(entry.message)
+    || asString(entry.note);
+
+  if (type !== 'comment' || !text) {
+    return null;
+  }
+
+  const idValue = typeInfo?.id ?? source.id ?? entry.id;
+  const id = typeof idValue === 'number' || typeof idValue === 'string' ? String(idValue) : undefined;
+
+  const author = userDisplayName(typeInfo?.authorUser)
+    || userDisplayName(source.authorUser)
+    || userDisplayName(source.createdBy)
+    || userDisplayName(source.author)
+    || userDisplayName(source.user)
+    || (asString(source.author) ? authorFromHtml(asString(source.author)!) : undefined)
+    || userDisplayName(entry.createdBy)
+    || userDisplayName(entry.author)
+    || userDisplayName(entry.user)
+    || (asString(entry.author) ? authorFromHtml(asString(entry.author)!) : undefined)
+    || 'Unknown';
+
+  const date = formatDate(
+    asString(typeInfo?.createdDatetime)
+    || asString(typeInfo?.changedDatetime)
+    || asString(typeInfo?.ymdt)
+    || asString(source.ymdt)
+    || asString(source.createdAt)
+    || asString(source.created)
+    || asString(source.date)
+    || asString(source.commentDate)
+    || asString(source.timestamp)
+    || asString(entry.createdAt)
+    || asString(entry.created)
+    || asString(entry.date)
+    || asString(entry.commentDate)
+    || asString(entry.timestamp)
+  );
+
+  return { id, type, author, date, text };
+}
+
+function formatApplicationComments(comments: UnknownRecord[], applicationId: number): string {
+  const formattedComments = comments
+    .map(formatApplicationComment)
+    .filter((comment): comment is FormattedApplicationComment => Boolean(comment));
+
+  if (formattedComments.length === 0) {
+    return 'No comments found for this application.';
+  }
+
+  const output = formattedComments.map((comment) => {
+    const idSuffix = comment.id ? ` #${comment.id}` : '';
+    const dateSuffix = comment.date ? ` - ${comment.date}` : '';
+    return `**[${comment.type}${idSuffix}]** ${comment.author}${dateSuffix}\n${comment.text}`;
+  }).join('\n\n');
+
+  return `Comments for application ${applicationId} (${formattedComments.length}):\n\n${output}`;
 }
 
 function formatApplication(app: Application): string {
@@ -54,7 +192,8 @@ function formatApplicationDetails(details: ApplicationDetails): string {
   let output = `# Application for ${applicant.firstName} ${applicant.lastName}\n\n`;
 
   output += `## Basic Info\n`;
-  output += `- **ID:** ${app.id}\n`;
+  output += `- **Application ID:** ${app.id}\n`;
+  output += `- **Applicant ID:** ${applicant.id}\n`;
   output += `- **Applied:** ${new Date(app.appliedDate).toLocaleDateString()}\n`;
   output += `- **Status:** ${app.status?.label || 'Unknown'}\n`;
   if (app.rating) output += `- **Rating:** ${'★'.repeat(app.rating)}${'☆'.repeat(5 - app.rating)}\n`;
@@ -96,11 +235,19 @@ function formatApplicationDetails(details: ApplicationDetails): string {
     }
   }
 
+  output += `\n## Attachments\n`;
+  output += `- **Resume File ID:** ${app.resumeFileId ?? 'none'}\n`;
+  output += `- **Cover Letter File ID:** ${app.coverLetterFileId ?? 'none'}\n`;
+  output += `- **Attachment Count:** ${app.attachmentCount ?? 0}\n`;
   if (app.attachments && app.attachments.length > 0) {
-    output += `\n## Attachments\n`;
     for (const att of app.attachments) {
       output += `- ${att.name} (ID: ${att.id})\n`;
       output += `  URL: ${att.fileUrl}\n`;
+    }
+  } else {
+    output += `- No attachments[] returned by API\n`;
+    if (app.resumeFileId) {
+      output += `  → Use get-attachment-url with resumeFileId: ${app.resumeFileId}\n`;
     }
   }
 
@@ -233,6 +380,28 @@ export function registerRecruitingTools(server: McpServer): void {
   );
 
   reg(server,
+    'get-application-comments',
+    'Get all comments/notes on a job application. Returns comment text, author, and timestamp.',
+    {
+      applicationId: z.string().regex(/^\d+$/, 'Application ID must be numeric').describe('The application ID (numeric)'),
+    },
+    async ({ applicationId }: { applicationId: string }) => {
+      try {
+        const id = parseInt(applicationId, 10);
+        const comments = await bambooGet<UnknownRecord[]>(`/applicant_tracking/applications/${id}/comments`);
+
+        if (!Array.isArray(comments) || comments.length === 0) {
+          return result('No comments found for this application.');
+        }
+
+        return result(formatApplicationComments(comments, id));
+      } catch (error) {
+        return result(formatErrorForUser(error), true);
+      }
+    }
+  );
+
+  reg(server,
     'get-jobs',
     'List job openings/summaries with applicant counts. Filter by status and sort by various fields.',
     {
@@ -289,33 +458,39 @@ export function registerRecruitingTools(server: McpServer): void {
   );
 
   reg(server,
-    'download-attachment',
-    'Download a CV/resume or cover letter attachment from an application. Use get-application-details first to get the fileUrl.',
+    'get-attachment-url',
+    'Get the download URL and curl command for a CV/resume or cover letter. Use get-application-details first to get resumeFileId or fileUrl. Consumer downloads the file locally using curl or similar.',
     {
-      fileUrl: z.string().describe('The fileUrl from application attachments (e.g., https://company.bamboohr.com/... or relative path)'),
+      fileUrl: z.string().optional().describe('The fileUrl from application attachments'),
+      resumeFileId: z.string().regex(/^\d+$/, 'Must be numeric').optional().describe('resumeFileId from get-application-details'),
+      coverLetterFileId: z.string().regex(/^\d+$/, 'Must be numeric').optional().describe('coverLetterFileId from get-application-details'),
     },
-    async ({ fileUrl }: { fileUrl: string }) => {
+    async ({ fileUrl, resumeFileId, coverLetterFileId }: { fileUrl?: string; resumeFileId?: string; coverLetterFileId?: string }) => {
       try {
-        const download = await bambooDownloadFile(fileUrl);
-
-        // Convert ArrayBuffer to base64 for text output
-        const base64 = Buffer.from(download.data).toString('base64');
-        const sizeKB = Math.round(download.data.byteLength / 1024);
-
-        // For text-based files, try to extract text
-        let textContent = '';
-        if (download.contentType.includes('text/') || download.contentType.includes('application/pdf')) {
-          // Note: PDF text extraction would need a separate library
-          textContent = '\n[File content available as base64 below. PDF parsing requires additional processing.]\n';
+        let url: string;
+        let label: string;
+        if (fileUrl) {
+          url = resolveBambooFileUrl(fileUrl);
+          label = 'Attachment';
+        } else if (resumeFileId) {
+          url = resolveBambooFileUrl(`/files/${resumeFileId}`);
+          label = 'Resume';
+        } else if (coverLetterFileId) {
+          url = resolveBambooFileUrl(`/files/${coverLetterFileId}`);
+          label = 'Cover Letter';
+        } else {
+          return result('Provide fileUrl, resumeFileId, or coverLetterFileId.', true);
         }
 
+        const outFile = label === 'Resume'
+          ? 'resume.pdf'
+          : label === 'Cover Letter'
+            ? 'cover_letter.pdf'
+            : 'attachment.pdf';
+        const curlCmd = `curl -u "$BAMBOO_API_TOKEN:x" -L ${shellQuote(url)} -o ${outFile}`;
         return result(
-          `Downloaded: ${download.filename}\n` +
-          `Size: ${sizeKB} KB\n` +
-          `Type: ${download.contentType}\n` +
-          `${textContent}\n` +
-          `Base64 (truncated to first 2000 chars):\n${base64.slice(0, 2000)}...\n\n` +
-          `Full base64 length: ${base64.length} characters`
+          `${label} URL: ${url}\n\n` +
+          `Download with curl:\n\`\`\`\n${curlCmd}\n\`\`\``
         );
       } catch (error) {
         return result(formatErrorForUser(error), true);

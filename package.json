@@ -1,11 +1,11 @@
 {
-  "name": "cl-bamboohr-mcp",
+  "name": "bamboohr-mcp",
   "version": "1.0.0",
   "description": "BambooHR MCP Server — comprehensive read/write access to BambooHR API",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": {
-    "cl-bamboohr-mcp": "dist/index.js"
+    "bamboohr-mcp": "dist/index.js"
   },
   "scripts": {
     "build": "tsc",

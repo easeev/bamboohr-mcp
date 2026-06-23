@@ -14,8 +14,25 @@ interface RequestOptions {
 let clientInstance: AxiosInstance | null = null;
 let configInstance: Config | null = null;
 const cache = new Map<string, CacheEntry>();
+const ALLOWED_FILE_PATH_PREFIXES = ['/applicant_tracking/', '/attachments/', '/files/'];
 
-function getConfig(): Config {
+function fullyDecodeURIComponent(value: string): string {
+  let previous: string;
+  let decoded = value;
+
+  do {
+    previous = decoded;
+    try {
+      decoded = decodeURIComponent(previous);
+    } catch {
+      throw new Error('Invalid path: malformed URL encoding');
+    }
+  } while (decoded !== previous);
+
+  return decoded;
+}
+
+export function getConfig(): Config {
   if (!configInstance) {
     configInstance = loadConfig();
   }
@@ -213,11 +230,27 @@ export interface FileDownloadResult {
   filename: string;
 }
 
-export async function bambooDownloadFile(
-  path: string,
-  params?: Record<string, unknown>
-): Promise<FileDownloadResult> {
-  const client = getClient();
+function normalizeAllowedFilePath(path: string): string {
+  if (/%2f|%5c/i.test(path)) {
+    throw new Error('Invalid path: encoded path separators not allowed');
+  }
+
+  const decodedPath = fullyDecodeURIComponent(path);
+
+  if (decodedPath.includes('..')) {
+    throw new Error('Invalid path: path traversal not allowed');
+  }
+
+  const normalizedPath = decodedPath.replace(/\/+/g, '/').replace(/\/\.\//g, '/');
+  const isAllowedPath = ALLOWED_FILE_PATH_PREFIXES.some(prefix => normalizedPath.startsWith(prefix));
+  if (!isAllowedPath) {
+    throw new Error('Invalid path: only attachment, file, and applicant tracking paths are allowed');
+  }
+
+  return normalizedPath;
+}
+
+export function resolveBambooFileUrl(path: string): string {
   const config = getConfig();
 
   // Validate and construct URL - prevent SSRF by only allowing BambooHR URLs
@@ -240,25 +273,37 @@ export async function bambooDownloadFile(
     ];
 
     if (!allowedHostnames.includes(hostname)) {
-      throw new Error(`Invalid URL: hostname ${hostname} is not allowed. Must be a BambooHR URL for domain ${config.companyDomain}`);
+      throw new Error(`Invalid URL: hostname ${hostname} is not allowed`);
     }
-    url = path;
+
+    if (hostname === 'api.bamboohr.com') {
+      const gatewayPrefix = `/api/gateway.php/${config.companyDomain}/v1`;
+      if (!parsedUrl.pathname.startsWith(`${gatewayPrefix}/`)) {
+        throw new Error('Invalid URL: API path is not allowed for this BambooHR company');
+      }
+      normalizeAllowedFilePath(parsedUrl.pathname.slice(gatewayPrefix.length));
+    } else {
+      normalizeAllowedFilePath(parsedUrl.pathname);
+    }
+
+    url = parsedUrl.toString();
   } else {
     // Relative path - only allow attachment/applicant_tracking endpoints
     // Prevent using this as a generic authenticated GET against any API path
-    // Reject path traversal attempts (e.g., /applicant_tracking/../../employees/directory)
-    if (path.includes('..')) {
-      throw new Error('Invalid path: path traversal not allowed');
-    }
-    // Normalize multiple slashes and current dir segments
-    const normalizedPath = path.replace(/\/+/g, '/').replace(/\/\.\//g, '/');
-    const allowedPathPrefixes = ['/applicant_tracking/', '/attachments/'];
-    const isAllowedPath = allowedPathPrefixes.some(prefix => normalizedPath.startsWith(prefix));
-    if (!isAllowedPath) {
-      throw new Error(`Invalid path: only attachment and applicant tracking paths are allowed`);
-    }
-    url = `${client.defaults.baseURL}${normalizedPath}`;
+    // Reject path traversal attempts, including URL-encoded variants.
+    const normalizedPath = normalizeAllowedFilePath(path);
+    url = `https://api.bamboohr.com/api/gateway.php/${config.companyDomain}/v1${normalizedPath}`;
   }
+
+  return url;
+}
+
+export async function bambooDownloadFile(
+  path: string,
+  params?: Record<string, unknown>
+): Promise<FileDownloadResult> {
+  const client = getClient();
+  const url = resolveBambooFileUrl(path);
 
   const response = await client.get<ArrayBuffer>(url, {
     params,
