@@ -47,7 +47,8 @@ describe('meta tools', () => {
       const handler = handlers.get('get-meta-fields')!;
       const result = await handler({ type: 'time_off_type' });
       expect(result.content[0].text).toContain('Vacation');
-      expect(result.content[0].text).toContain('alias: days');
+      expect(result.content[0].text).toContain('units: days');
+      expect(result.content[0].text).not.toContain('alias: days');
       expect(mockedClient.bambooGet).toHaveBeenCalledWith('/meta/time_off/types');
     });
 

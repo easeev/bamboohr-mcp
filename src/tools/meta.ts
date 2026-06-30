@@ -11,6 +11,7 @@ type MetaFieldLike = {
   name: string;
   type: string;
   alias?: string;
+  units?: string;
 };
 
 type TimeOffTypesResponse = {
@@ -41,6 +42,7 @@ function formatMetaFields(fields: MetaFieldLike[]): string {
     .map((f) => {
       let line = `- **${f.name}** (ID: ${f.id}, type: ${f.type})`;
       if (f.alias) line += ` [alias: ${f.alias}]`;
+      if (f.units) line += ` [units: ${f.units}]`;
       return line;
     })
     .join('\n');
@@ -72,7 +74,7 @@ export function registerMetaTools(server: McpServer): void {
                 id: field.id,
                 name: field.name,
                 type: 'time_off_type',
-                alias: units,
+                units,
               };
             })
           : type === 'time_off_policy'

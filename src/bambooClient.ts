@@ -232,11 +232,13 @@ export async function bambooWebGet<T>(
     try {
       const response = await client.get<T>(path, { params });
 
-      const cacheKey = getCacheKey('WEBGET', path, params);
-      cache.set(cacheKey, {
-        data: response.data,
-        expiresAt: Date.now() + config.cacheTtlMs,
-      });
+      if (!options?.skipCache) {
+        const cacheKey = getCacheKey('WEBGET', path, params);
+        cache.set(cacheKey, {
+          data: response.data,
+          expiresAt: Date.now() + config.cacheTtlMs,
+        });
+      }
 
       return response.data;
     } catch (error) {

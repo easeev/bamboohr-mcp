@@ -99,8 +99,8 @@ function userDisplayName(value: unknown): string | undefined {
 }
 
 function applicationNotFoundMessage(id: number): string {
-  return `Error [NOT_FOUND]: Application ${id} was not found. If this ID came from a BambooHR URL like /hiring/candidates/${id}, it is likely a candidate/applicant ID, not an application ID.\n\n` +
-    `Troubleshooting: get-application-comments uses BambooHR's hiring notes endpoint for comment bodies. Pass applicationId for application notes, or pass applicantId only when you already have the applicant/candidate ID from application details/list results.`;
+  return `Error [NOT_FOUND]: Application ${id} was not found.\n\n` +
+    `Troubleshooting: get-application-comments uses BambooHR's hiring notes endpoint for comment bodies. BambooHR /hiring/candidates/{id} URLs commonly contain application IDs; pass that URL value as applicationId. Use applicantId only when you already have the applicant/candidate ID from application details/list results.`;
 }
 
 function applicantApplicationsNotFoundMessage(applicantId: number): string {
@@ -117,8 +117,9 @@ async function resolveApplicationIdsFromCandidateId(candidateId: number): Promis
     `/hiring/api/candidates/${candidateId}/applications`
   );
   return (Array.isArray(response.result) ? response.result : [])
-    .map((application) => parseInt(String(application.id), 10))
-    .filter((id) => Number.isInteger(id));
+    .map((application) => String(application.id ?? '').trim())
+    .filter((id) => /^\d+$/.test(id))
+    .map((id) => parseInt(id, 10));
 }
 
 async function getPrivateApplicationComments(applicationId: number): Promise<PrivateHiringNotesResponse> {
@@ -132,8 +133,8 @@ async function getPrivateApplicationComments(applicationId: number): Promise<Pri
 function formatPrivateApplicationComments(notes: PrivateHiringNotesResponse, applicationId: number): string {
   const comments = notes.result?.entities?.comments;
   const users = notes.result?.entities?.users?.byId || {};
-  const ids = Array.isArray(comments?.allIds) ? comments.allIds : [];
   const byId = comments?.byId || {};
+  const ids = Array.isArray(comments?.allIds) ? comments.allIds : Object.keys(byId);
 
   const output = ids
     .map((id) => {
@@ -397,21 +398,43 @@ export function registerRecruitingTools(server: McpServer): void {
       const id = parseInt((applicationId || applicantId)!, 10);
       try {
         if (applicantId) {
-          const applicationIds = await resolveApplicationIdsFromCandidateId(id);
+          let applicationIds: number[];
+          try {
+            applicationIds = await resolveApplicationIdsFromCandidateId(id);
+          } catch (error) {
+            if (isNotFoundError(error)) {
+              return result(applicantApplicationsNotFoundMessage(id), true);
+            }
+            throw error;
+          }
           if (applicationIds.length === 0) {
             return result(applicantApplicationsNotFoundMessage(id), true);
           }
 
-          const sections = await Promise.all(
-            applicationIds.map(async (resolvedApplicationId) => {
-              return formatPrivateApplicationComments(
-                await getPrivateApplicationComments(resolvedApplicationId),
-                resolvedApplicationId
-              );
-            })
-          );
+          const sections: Array<{ text: string; isError: boolean }> = [];
+          for (const resolvedApplicationId of applicationIds) {
+            try {
+              sections.push({
+                text: formatPrivateApplicationComments(
+                  await getPrivateApplicationComments(resolvedApplicationId),
+                  resolvedApplicationId
+                ),
+                isError: false,
+              });
+            } catch (error) {
+              if (isNotFoundError(error)) {
+                sections.push({
+                  text: applicationNotFoundMessage(resolvedApplicationId),
+                  isError: true,
+                });
+                continue;
+              }
+              throw error;
+            }
+          }
           return result(
-            `Candidate/applicant ${id} application comments:\n\n${sections.join('\n\n---\n\n')}`
+            `Candidate/applicant ${id} application comments:\n\n${sections.map((section) => section.text).join('\n\n---\n\n')}`,
+            sections.some((section) => section.isError)
           );
         }
 

@@ -233,12 +233,18 @@ describe('bambooClient', () => {
       _resetForTesting();
       process.env.BAMBOO_CACHE_TTL_MS = '60000';
       mockedAxios.create.mockReturnValue(mockInstance as any);
-      mockInstance.get.mockResolvedValue({ data: { fresh: true } });
+      mockInstance.get
+        .mockResolvedValueOnce({ data: { cached: true } })
+        .mockResolvedValueOnce({ data: { fresh: true } });
 
-      await bambooWebGet('/hiring/api/applications/41271/notes');
-      await bambooWebGet('/hiring/api/applications/41271/notes', undefined, { skipCache: true });
+      const first = await bambooWebGet('/hiring/api/applications/41271/notes');
+      const second = await bambooWebGet('/hiring/api/applications/41271/notes', undefined, { skipCache: true });
+      const third = await bambooWebGet('/hiring/api/applications/41271/notes');
 
       expect(mockInstance.get).toHaveBeenCalledTimes(2);
+      expect(first).toEqual({ cached: true });
+      expect(second).toEqual({ fresh: true });
+      expect(third).toEqual({ cached: true });
     });
 
     it('retries web GET server errors', async () => {

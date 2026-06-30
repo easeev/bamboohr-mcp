@@ -285,6 +285,36 @@ describe('recruiting tools', () => {
       expect(result.content[0].text).toContain('No comments found for application 41271.');
     });
 
+    it('falls back to comment IDs from byId when allIds is missing', async () => {
+      mockedClient.bambooWebGet.mockResolvedValueOnce({
+        result: {
+          entities: {
+            comments: {
+              byId: {
+                11042: {
+                  id: 11042,
+                  text: 'Present without allIds.',
+                  userId: 2753,
+                },
+              },
+            },
+            users: {
+              byId: {
+                2753: { id: 2753, name: 'Ilias Farkhutdinov' },
+              },
+            },
+          },
+        },
+      });
+
+      const handler = handlers.get('get-application-comments')!;
+      const result = await handler({ applicationId: '41271' });
+
+      expect(result.isError).toBeUndefined();
+      expect(result.content[0].text).toContain('Comments for application 41271 (1)');
+      expect(result.content[0].text).toContain('Present without allIds.');
+    });
+
     it('resolves an explicit applicant ID through the private hiring API', async () => {
       mockedClient.bambooWebGet
         .mockResolvedValueOnce({
@@ -320,6 +350,27 @@ describe('recruiting tools', () => {
       expect(result.content[0].text).toContain('Comments for application 41271 (2)');
     });
 
+    it('ignores non-numeric application IDs returned by private applicant resolution', async () => {
+      mockedClient.bambooWebGet
+        .mockResolvedValueOnce({
+          result: [{ id: '41087abc' }, { id: '41271' }, { id: null }],
+        })
+        .mockResolvedValueOnce(privateNotesResponse);
+
+      const handler = handlers.get('get-application-comments')!;
+      const result = await handler({ applicantId: '40599' });
+
+      expect(mockedClient.bambooWebGet).toHaveBeenCalledTimes(2);
+      expect(mockedClient.bambooWebGet).toHaveBeenNthCalledWith(
+        2,
+        '/hiring/api/applications/41271/notes',
+        undefined,
+        { skipCache: true }
+      );
+      expect(result.isError).toBeUndefined();
+      expect(result.content[0].text).toContain('Comments for application 41271 (2)');
+    });
+
     it('does not fall back to public API if private notes endpoint fails', async () => {
       mockedClient.bambooWebGet.mockRejectedValueOnce(makeAxiosError(404));
 
@@ -328,7 +379,7 @@ describe('recruiting tools', () => {
 
       expect(result.isError).toBe(true);
       expect(result.content[0].text).toContain('Application 41271 was not found');
-      expect(result.content[0].text).toContain('/hiring/candidates/41271');
+      expect(result.content[0].text).toContain('/hiring/candidates/{id} URLs commonly contain application IDs');
       expect(mockedClient.bambooGet).not.toHaveBeenCalled();
     });
 
@@ -364,6 +415,22 @@ describe('recruiting tools', () => {
 
       expect(result.isError).toBe(true);
       expect(result.content[0].text).toContain('API_ERROR');
+      expect(mockedClient.bambooGet).not.toHaveBeenCalled();
+    });
+
+    it('preserves fetched comments when a later resolved application returns not found', async () => {
+      mockedClient.bambooWebGet
+        .mockResolvedValueOnce({ result: [{ id: '41087' }, { id: '41271' }] })
+        .mockResolvedValueOnce(privateNotesResponse)
+        .mockRejectedValueOnce(makeAxiosError(404));
+
+      const handler = handlers.get('get-application-comments')!;
+      const result = await handler({ applicantId: '40599' });
+
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain('Comments for application 41087 (2)');
+      expect(result.content[0].text).toContain('Application 41271 was not found');
+      expect(result.content[0].text).not.toContain('No applications found for applicant/candidate 40599');
       expect(mockedClient.bambooGet).not.toHaveBeenCalled();
     });
 
