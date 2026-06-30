@@ -12,6 +12,7 @@ interface RequestOptions {
 }
 
 let clientInstance: AxiosInstance | null = null;
+let webClientInstance: AxiosInstance | null = null;
 let configInstance: Config | null = null;
 const cache = new Map<string, CacheEntry>();
 const ALLOWED_FILE_PATH_PREFIXES = ['/applicant_tracking/', '/attachments/', '/files/'];
@@ -92,11 +93,50 @@ function createClient(): AxiosInstance {
   return instance;
 }
 
+function createWebClient(): AxiosInstance {
+  const config = getConfig();
+
+  const instance = axios.create({
+    baseURL: `https://${config.companyDomain}.bamboohr.com`,
+    auth: {
+      username: config.apiToken,
+      password: 'x',
+    },
+    headers: {
+      Accept: 'application/json',
+    },
+    timeout: config.requestTimeoutMs,
+  });
+
+  if (config.debug) {
+    instance.interceptors.request.use((reqConfig: InternalAxiosRequestConfig) => {
+      console.error(`[DEBUG] ${reqConfig.method?.toUpperCase()} ${reqConfig.url}`);
+      return reqConfig;
+    });
+  }
+
+  instance.interceptors.response.use(
+    (response) => response,
+    (error: AxiosError) => {
+      return Promise.reject(sanitizeError(error));
+    }
+  );
+
+  return instance;
+}
+
 export function getClient(): AxiosInstance {
   if (!clientInstance) {
     clientInstance = createClient();
   }
   return clientInstance;
+}
+
+export function getWebClient(): AxiosInstance {
+  if (!webClientInstance) {
+    webClientInstance = createWebClient();
+  }
+  return webClientInstance;
 }
 
 export function getCacheKey(method: string, url: string, params?: Record<string, unknown>): string {
@@ -153,6 +193,65 @@ export async function bambooGet<T>(
         delayMs = isNaN(retryAfter) ? 1000 : retryAfter * 1000;
       } else {
         // Exponential backoff with jitter
+        const baseDelay = Math.pow(2, attempt) * 1000;
+        const jitter = Math.random() * 500;
+        delayMs = baseDelay + jitter;
+      }
+
+      if (config.debug) {
+        console.error(
+          `[DEBUG] Retry ${attempt + 1}/${config.maxRetries} after ${delayMs}ms: ${categorized.message}`
+        );
+      }
+
+      await sleep(delayMs);
+    }
+  }
+
+  throw lastError;
+}
+
+export async function bambooWebGet<T>(
+  path: string,
+  params?: Record<string, unknown>,
+  options?: RequestOptions
+): Promise<T> {
+  const config = getConfig();
+  const client = getWebClient();
+
+  if (!options?.skipCache) {
+    const cacheKey = getCacheKey('WEBGET', path, params);
+    const cached = cache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached.data as T;
+    }
+  }
+
+  let lastError: unknown;
+  for (let attempt = 0; attempt <= config.maxRetries; attempt++) {
+    try {
+      const response = await client.get<T>(path, { params });
+
+      const cacheKey = getCacheKey('WEBGET', path, params);
+      cache.set(cacheKey, {
+        data: response.data,
+        expiresAt: Date.now() + config.cacheTtlMs,
+      });
+
+      return response.data;
+    } catch (error) {
+      lastError = error;
+      const categorized = categorizeError(error);
+
+      if (!categorized.retryable || attempt === config.maxRetries) {
+        throw error;
+      }
+
+      let delayMs: number;
+      if (error instanceof AxiosError && error.response?.headers?.['retry-after']) {
+        const retryAfter = parseInt(error.response.headers['retry-after'], 10);
+        delayMs = isNaN(retryAfter) ? 1000 : retryAfter * 1000;
+      } else {
         const baseDelay = Math.pow(2, attempt) * 1000;
         const jitter = Math.random() * 500;
         delayMs = baseDelay + jitter;
@@ -333,6 +432,7 @@ export async function bambooDownloadFile(
 // Reset for testing
 export function _resetForTesting(): void {
   clientInstance = null;
+  webClientInstance = null;
   configInstance = null;
   cache.clear();
 }

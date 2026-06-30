@@ -1,9 +1,20 @@
 import axios, { AxiosError, AxiosHeaders } from 'axios';
-import { bambooGet, bambooPost, bambooPut, clearCache, getCacheKey, resolveBambooFileUrl, _resetForTesting } from '../bambooClient';
+import { bambooGet, bambooPost, bambooPut, bambooWebGet, clearCache, getCacheKey, resolveBambooFileUrl, _resetForTesting } from '../bambooClient';
 
 jest.mock('axios');
 
 const mockedAxios = axios as jest.Mocked<typeof axios>;
+
+function makeAxiosError(status: number): AxiosError {
+  const headers = new AxiosHeaders();
+  return new AxiosError(
+    'test error',
+    'ERR_BAD_RESPONSE',
+    undefined,
+    undefined,
+    { status, statusText: 'Error', headers: {}, config: { headers }, data: '' }
+  );
+}
 
 describe('bambooClient', () => {
   let mockInstance: {
@@ -184,6 +195,64 @@ describe('bambooClient', () => {
       mockInstance.get.mockRejectedValue(error);
       await expect(bambooGet('/test')).rejects.toThrow('Permanent failure');
       expect(mockInstance.get).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('bambooWebGet', () => {
+    it('uses BambooHR company web host with API token auth', async () => {
+      mockInstance.get.mockResolvedValueOnce({ data: { result: [] } });
+
+      const data = await bambooWebGet('/hiring/api/applications/41271/notes');
+
+      expect(data).toEqual({ result: [] });
+      expect(mockedAxios.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          baseURL: 'https://testco.bamboohr.com',
+          auth: { username: 'test-token', password: 'x' },
+          headers: { Accept: 'application/json' },
+        })
+      );
+      expect(mockInstance.get).toHaveBeenCalledWith('/hiring/api/applications/41271/notes', { params: undefined });
+    });
+
+    it('caches web GET responses when TTL > 0', async () => {
+      _resetForTesting();
+      process.env.BAMBOO_CACHE_TTL_MS = '60000';
+      mockedAxios.create.mockReturnValue(mockInstance as any);
+      mockInstance.get.mockResolvedValueOnce({ data: { cached: true } });
+
+      const first = await bambooWebGet('/hiring/api/settings');
+      const second = await bambooWebGet('/hiring/api/settings');
+
+      expect(first).toEqual({ cached: true });
+      expect(second).toEqual({ cached: true });
+      expect(mockInstance.get).toHaveBeenCalledTimes(1);
+    });
+
+    it('skips web GET cache when skipCache option is set', async () => {
+      _resetForTesting();
+      process.env.BAMBOO_CACHE_TTL_MS = '60000';
+      mockedAxios.create.mockReturnValue(mockInstance as any);
+      mockInstance.get.mockResolvedValue({ data: { fresh: true } });
+
+      await bambooWebGet('/hiring/api/applications/41271/notes');
+      await bambooWebGet('/hiring/api/applications/41271/notes', undefined, { skipCache: true });
+
+      expect(mockInstance.get).toHaveBeenCalledTimes(2);
+    });
+
+    it('retries web GET server errors', async () => {
+      _resetForTesting();
+      process.env.BAMBOO_MAX_RETRIES = '1';
+      mockedAxios.create.mockReturnValue(mockInstance as any);
+      mockInstance.get
+        .mockRejectedValueOnce(makeAxiosError(500))
+        .mockResolvedValueOnce({ data: { ok: true } });
+
+      const data = await bambooWebGet('/hiring/api/settings');
+
+      expect(data).toEqual({ ok: true });
+      expect(mockInstance.get).toHaveBeenCalledTimes(2);
     });
   });
 

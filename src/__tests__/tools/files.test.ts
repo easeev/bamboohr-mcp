@@ -25,15 +25,17 @@ describe('file tools', () => {
 
   describe('list-company-files', () => {
     it('lists company files by category', async () => {
-      mockedClient.bambooGet.mockResolvedValueOnce([
-        {
-          id: '1',
-          name: 'Policies',
-          files: [
-            { id: '10', name: 'Handbook.pdf', size: 1024, dateCreated: '2026-01-01' },
-          ],
-        },
-      ]);
+      mockedClient.bambooGet.mockResolvedValueOnce({
+        categories: [
+          {
+            id: '1',
+            name: 'Policies',
+            files: [
+              { id: '10', name: 'Handbook.pdf', size: 1024, dateCreated: '2026-01-01' },
+            ],
+          },
+        ],
+      });
 
       const handler = handlers.get('list-company-files')!;
       const result = await handler({});
@@ -42,11 +44,25 @@ describe('file tools', () => {
     });
 
     it('returns empty message', async () => {
-      mockedClient.bambooGet.mockResolvedValueOnce([]);
+      mockedClient.bambooGet.mockResolvedValueOnce({ categories: [] });
 
       const handler = handlers.get('list-company-files')!;
       const result = await handler({});
       expect(result.content[0].text).toContain('No company files');
+    });
+
+    it('supports legacy bare array category responses', async () => {
+      mockedClient.bambooGet.mockResolvedValueOnce([
+        {
+          id: '1',
+          name: 'Legacy Policies',
+          files: [],
+        },
+      ]);
+
+      const handler = handlers.get('list-company-files')!;
+      const result = await handler({});
+      expect(result.content[0].text).toContain('Legacy Policies');
     });
   });
 
@@ -72,15 +88,18 @@ describe('file tools', () => {
 
   describe('get-employee-files', () => {
     it('lists employee files', async () => {
-      mockedClient.bambooGet.mockResolvedValueOnce([
-        {
-          id: '1',
-          name: 'Documents',
-          files: [
-            { id: '20', name: 'Resume.pdf', size: 2048, dateCreated: '2026-01-15' },
-          ],
-        },
-      ]);
+      mockedClient.bambooGet.mockResolvedValueOnce({
+        employee: { id: '123' },
+        categories: [
+          {
+            id: '1',
+            name: 'Documents',
+            files: [
+              { id: '20', name: 'Resume.pdf', size: 2048, dateCreated: '2026-01-15' },
+            ],
+          },
+        ],
+      });
 
       const handler = handlers.get('get-employee-files')!;
       const result = await handler({ employeeId: '123' });

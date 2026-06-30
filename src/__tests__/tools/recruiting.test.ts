@@ -1,10 +1,28 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { AxiosError, AxiosHeaders } from 'axios';
 import * as bambooClient from '../../bambooClient';
 import { registerRecruitingTools } from '../../tools/recruiting';
 
 jest.mock('../../bambooClient');
 
 const mockedClient = bambooClient as jest.Mocked<typeof bambooClient>;
+
+function makeAxiosError(status: number): AxiosError {
+  const headers = new AxiosHeaders();
+  return new AxiosError(
+    'test error',
+    'ERR_BAD_RESPONSE',
+    undefined,
+    undefined,
+    {
+      status,
+      statusText: 'Error',
+      headers: {},
+      config: { headers },
+      data: 'error',
+    }
+  );
+}
 
 describe('recruiting tools', () => {
   let handlers: Map<string, Function>;
@@ -20,7 +38,7 @@ describe('recruiting tools', () => {
   });
 
   beforeEach(() => {
-    jest.clearAllMocks();
+    jest.resetAllMocks();
   });
 
   describe('get-applications', () => {
@@ -206,84 +224,172 @@ describe('recruiting tools', () => {
   });
 
   describe('get-application-comments', () => {
-    it('returns only comment timeline entries from BambooHR topLevel response', async () => {
-      mockedClient.bambooGet.mockResolvedValueOnce([
-        {
-          topLevel: {
-            type: {
-              type: 'comment',
-              id: 11053,
-              authorUser: { id: 2385, preferredName: 'Eugene Aseev' },
-              createdDatetime: '2026-06-23T06:20:28+00:00',
+    const privateNotesResponse = {
+      meta: { totalCount: 2 },
+      result: {
+        entities: {
+          comments: {
+            allIds: [11042, 11043],
+            byId: {
+              11042: {
+                id: 11042,
+                text: '<p>Strong technical fit.</p>',
+                createdDate: '2026-06-16T12:18:44',
+                userId: 2753,
+              },
+              11043: {
+                id: 11043,
+                text: 'Move to next step.<br>Good platform background.',
+                createdDate: '2026-06-17T12:51:58',
+                userId: 2385,
+              },
             },
-            comment: 'Strong technical fit.',
-            ymdt: '2026-06-23T06:20:28+00:00',
+          },
+          users: {
+            byId: {
+              2753: { id: 2753, name: 'Ilias Farkhutdinov' },
+              2385: { id: 2385, name: 'Eugene Aseev' },
+            },
           },
         },
-        {
-          topLevel: {
-            type: {
-              type: 'status',
-              id: 86741,
-              user: { id: 2753, preferredName: 'Ilias Farkhutdinov' },
-              ymdt: '2026-06-18T15:41:26+00:00',
-            },
-            author: '<span data-comment-employee-name="Ilias Farkhutdinov">Ilias</span>',
-            ymdt: '2026-06-18T15:41:26+00:00',
-          },
-        },
-        {
-          topLevel: {
-            type: {
-              type: 'comment',
-              id: 11022,
-              authorUser: { id: 2750, preferredName: 'Tanya Chenushkina' },
-              createdDatetime: '2026-06-15T11:25:42+00:00',
-            },
-            comment: 'Move to technical interview.',
-            ymdt: '2026-06-15T11:25:42+00:00',
-          },
-        },
-      ]);
+      },
+    };
+
+    it('returns comment bodies from the private hiring notes endpoint', async () => {
+      mockedClient.bambooWebGet.mockResolvedValueOnce(privateNotesResponse);
 
       const handler = handlers.get('get-application-comments')!;
-      const result = await handler({ applicationId: '41021' });
+      const result = await handler({ applicationId: '41271' });
 
-      expect(result.content[0].text).toContain('Comments for application 41021 (2)');
-      expect(result.content[0].text).toContain('**[comment #11053]** Eugene Aseev - 2026-06-23T06:20:28.000Z');
-      expect(result.content[0].text).toContain('Strong technical fit.');
-      expect(result.content[0].text).toContain('Tanya Chenushkina');
-      expect(result.content[0].text).not.toContain('86741');
-      expect(result.content[0].text).not.toContain('DEBUG raw response');
-    });
-
-    it('supports flat comment responses', async () => {
-      mockedClient.bambooGet.mockResolvedValueOnce([
-        {
-          id: 300,
-          type: 'comment',
-          author: { firstName: 'Jane', lastName: 'Doe' },
-          createdAt: '2026-06-01T00:00:00Z',
-          body: 'Flat response comment.',
-        },
-      ]);
-
-      const handler = handlers.get('get-application-comments')!;
-      const result = await handler({ applicationId: '101' });
-
-      expect(result.content[0].text).toContain('**[comment #300]** Jane Doe - 2026-06-01T00:00:00.000Z');
-      expect(result.content[0].text).toContain('Flat response comment.');
-    });
-
-    it('handles unexpected non-array comment responses as empty', async () => {
-      mockedClient.bambooGet.mockResolvedValueOnce({ comments: [] });
-
-      const handler = handlers.get('get-application-comments')!;
-      const result = await handler({ applicationId: '101' });
-
-      expect(result.content[0].text).toContain('No comments found');
+      expect(mockedClient.bambooWebGet).toHaveBeenCalledWith(
+        '/hiring/api/applications/41271/notes',
+        undefined,
+        { skipCache: true }
+      );
       expect(result.isError).toBeUndefined();
+      expect(result.content[0].text).toContain('Comments for application 41271 (2)');
+      expect(result.content[0].text).toContain('**[comment #11042]** Ilias Farkhutdinov - 2026-06-16T12:18:44');
+      expect(result.content[0].text).toContain('Strong technical fit.');
+      expect(result.content[0].text).toContain('Move to next step.\nGood platform background.');
     });
+
+    it('returns no comments when private notes response has no comments', async () => {
+      mockedClient.bambooWebGet.mockResolvedValueOnce({
+        result: { entities: { comments: { allIds: [], byId: {} }, users: { byId: {} } } },
+      });
+
+      const handler = handlers.get('get-application-comments')!;
+      const result = await handler({ applicationId: '41271' });
+
+      expect(result.isError).toBeUndefined();
+      expect(result.content[0].text).toContain('No comments found for application 41271.');
+    });
+
+    it('resolves an explicit applicant ID through the private hiring API', async () => {
+      mockedClient.bambooWebGet
+        .mockResolvedValueOnce({
+          result: [{ id: '41087' }, { id: '41271' }],
+        })
+        .mockResolvedValueOnce({
+          result: { entities: { comments: { allIds: [], byId: {} }, users: { byId: {} } } },
+        })
+        .mockResolvedValueOnce(privateNotesResponse);
+
+      const handler = handlers.get('get-application-comments')!;
+      const result = await handler({ applicantId: '40599' });
+
+      expect(mockedClient.bambooWebGet).toHaveBeenNthCalledWith(
+        1,
+        '/hiring/api/candidates/40599/applications'
+      );
+      expect(mockedClient.bambooWebGet).toHaveBeenNthCalledWith(
+        2,
+        '/hiring/api/applications/41087/notes',
+        undefined,
+        { skipCache: true }
+      );
+      expect(mockedClient.bambooWebGet).toHaveBeenNthCalledWith(
+        3,
+        '/hiring/api/applications/41271/notes',
+        undefined,
+        { skipCache: true }
+      );
+      expect(result.isError).toBeUndefined();
+      expect(result.content[0].text).toContain('Candidate/applicant 40599 application comments');
+      expect(result.content[0].text).toContain('No comments found for application 41087.');
+      expect(result.content[0].text).toContain('Comments for application 41271 (2)');
+    });
+
+    it('does not fall back to public API if private notes endpoint fails', async () => {
+      mockedClient.bambooWebGet.mockRejectedValueOnce(makeAxiosError(404));
+
+      const handler = handlers.get('get-application-comments')!;
+      const result = await handler({ applicationId: '41271' });
+
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain('Application 41271 was not found');
+      expect(result.content[0].text).toContain('/hiring/candidates/41271');
+      expect(mockedClient.bambooGet).not.toHaveBeenCalled();
+    });
+
+    it('does not fall back to public applicant scan when private candidate applications endpoint fails', async () => {
+      mockedClient.bambooWebGet.mockRejectedValueOnce(makeAxiosError(404));
+
+      const handler = handlers.get('get-application-comments')!;
+      const result = await handler({ applicantId: '40599' });
+
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain('No applications found for applicant/candidate 40599');
+      expect(mockedClient.bambooGet).not.toHaveBeenCalled();
+    });
+
+    it('does not hide non-404 private applicant resolution errors behind public scan', async () => {
+      mockedClient.bambooWebGet.mockRejectedValueOnce(makeAxiosError(500));
+
+      const handler = handlers.get('get-application-comments')!;
+      const result = await handler({ applicantId: '40599' });
+
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain('API_ERROR');
+      expect(mockedClient.bambooGet).not.toHaveBeenCalled();
+    });
+
+    it('returns the private notes error when applicant comment fetch fails', async () => {
+      mockedClient.bambooWebGet
+        .mockResolvedValueOnce({ result: [{ id: '41271' }] })
+        .mockRejectedValueOnce(makeAxiosError(500));
+
+      const handler = handlers.get('get-application-comments')!;
+      const result = await handler({ applicantId: '40599' });
+
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain('API_ERROR');
+      expect(mockedClient.bambooGet).not.toHaveBeenCalled();
+    });
+
+    it('requires exactly one application or applicant ID', async () => {
+      const handler = handlers.get('get-application-comments')!;
+
+      const missing = await handler({});
+      expect(missing.isError).toBe(true);
+      expect(missing.content[0].text).toContain('Provide applicationId or applicantId');
+
+      const both = await handler({ applicationId: '41271', applicantId: '40599' });
+      expect(both.isError).toBe(true);
+      expect(both.content[0].text).toContain('Provide either applicationId or applicantId');
+    });
+
+    it('returns applicant-specific guidance when applicant resolution finds no applications', async () => {
+      mockedClient.bambooWebGet.mockResolvedValueOnce({ result: [] });
+
+      const handler = handlers.get('get-application-comments')!;
+      const result = await handler({ applicantId: '40599' });
+
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain('No applications found for applicant/candidate 40599');
+      expect(result.content[0].text).toContain('pass that value as applicationId');
+    });
+
   });
 
   describe('get-attachment-url', () => {

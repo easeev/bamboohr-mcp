@@ -6,6 +6,27 @@ import { formatEmployeeList } from '../formatters.js';
 import { MetaField, Department, EmployeeDirectory } from '../types.js';
 import { metaFieldTypeSchema } from '../validation.js';
 
+type MetaFieldLike = {
+  id: number | string;
+  name: string;
+  type: string;
+  alias?: string;
+};
+
+type TimeOffTypesResponse = {
+  timeOffTypes?: Array<{ id: number | string; name: string; units?: string }>;
+};
+
+type ListFieldResponse = Array<{
+  alias?: string;
+  name?: string;
+  options?: Array<{
+    id: number | string;
+    name: string;
+    archived?: string;
+  }>;
+}>;
+
 function result(text: string, isError?: boolean) {
   return { content: [{ type: 'text' as const, text }], ...(isError ? { isError } : {}) };
 }
@@ -13,6 +34,16 @@ function result(text: string, isError?: boolean) {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function reg(server: McpServer, name: string, description: string, params: any, handler: any) {
   server.tool(name, description, params, handler);
+}
+
+function formatMetaFields(fields: MetaFieldLike[]): string {
+  return fields
+    .map((f) => {
+      let line = `- **${f.name}** (ID: ${f.id}, type: ${f.type})`;
+      if (f.alias) line += ` [alias: ${f.alias}]`;
+      return line;
+    })
+    .join('\n');
 }
 
 export function registerMetaTools(server: McpServer): void {
@@ -25,18 +56,38 @@ export function registerMetaTools(server: McpServer): void {
     async ({ type }: { type?: string }) => {
       try {
         if (type) metaFieldTypeSchema.parse(type);
-        const path = type ? `/meta/fields/${type}` : '/meta/fields';
-        const fields = await bambooGet<MetaField[]>(path);
+        const path = type === 'time_off_type'
+          ? '/meta/time_off/types'
+          : type === 'time_off_policy'
+            ? '/meta/time_off/policies'
+            : type
+              ? `/meta/fields/${type}`
+              : '/meta/fields';
+        const response = await bambooGet<MetaField[] | TimeOffTypesResponse>(path);
+        const fields: MetaFieldLike[] = type === 'time_off_type'
+          ? (Array.isArray(response) ? response : response.timeOffTypes ?? [])
+            .map((field) => {
+              const units = 'units' in field && typeof field.units === 'string' ? field.units : undefined;
+              return {
+                id: field.id,
+                name: field.name,
+                type: 'time_off_type',
+                alias: units,
+              };
+            })
+          : type === 'time_off_policy'
+            ? (Array.isArray(response) ? response : [])
+              .map((field) => ({
+                ...field,
+                type: 'time_off_policy',
+              }))
+            : Array.isArray(response)
+              ? response
+              : [];
         if (!fields || fields.length === 0) {
           return result('No meta fields found.');
         }
-        const formatted = fields
-          .map((f) => {
-            let line = `- **${f.name}** (ID: ${f.id}, type: ${f.type})`;
-            if (f.alias) line += ` [alias: ${f.alias}]`;
-            return line;
-          })
-          .join('\n');
+        const formatted = formatMetaFields(fields);
         return result(`Meta Fields:\n\n${formatted}`);
       } catch (error) {
         return result(formatErrorForUser(error), true);
@@ -50,16 +101,22 @@ export function registerMetaTools(server: McpServer): void {
     {},
     async () => {
       try {
-        const departments = await bambooGet<Department[]>('/meta/departments');
+        const lists = await bambooGet<ListFieldResponse>('/meta/lists', { format: 'json' });
+        const departmentList = lists.find((list) =>
+          list.alias?.toLowerCase() === 'department'
+          || list.name?.toLowerCase() === 'department'
+        );
+        const departments: Department[] = (departmentList?.options ?? [])
+          .filter((option) => option.archived !== 'yes')
+          .map((option) => ({
+            id: String(option.id),
+            name: option.name,
+          }));
         if (!departments || departments.length === 0) {
           return result('No departments found.');
         }
         const formatted = departments
-          .map((d) => {
-            let line = `- **${d.name}** (ID: ${d.id})`;
-            if (d.parentId) line += ` [parent: ${d.parentId}]`;
-            return line;
-          })
+          .map((d) => `- **${d.name}** (ID: ${d.id})`)
           .join('\n');
         return result(`Departments:\n\n${formatted}`);
       } catch (error) {

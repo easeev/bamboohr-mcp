@@ -116,6 +116,12 @@ npm run build
 - **update-application-status** — Advance/reject/hire candidates (WRITE)
 - **add-application-comment** — Add screening notes or rejection reasons (WRITE)
 
+Note: `get-application-comments` reads existing comment bodies through
+BambooHR's hiring web API (`/hiring/api/...`). The documented public ATS API
+supports adding comments with `POST /applicant_tracking/applications/{id}/comments`,
+but does not provide a working public endpoint for reading existing comment
+bodies. Other recruiting tools use documented public API endpoints.
+
 ## Security
 
 - All IDs validated (numeric regex for employee/file/report IDs)

@@ -151,9 +151,11 @@ describe('employee tools', () => {
 
   describe('get-employee-goals', () => {
     it('returns goals', async () => {
-      mockedClient.bambooGet.mockResolvedValueOnce([
-        { id: '1', title: 'Learn TypeScript', status: 'in_progress', percentComplete: 50 },
-      ]);
+      mockedClient.bambooGet.mockResolvedValueOnce({
+        goals: [
+          { id: '1', title: 'Learn TypeScript', status: 'in_progress', percentComplete: 50 },
+        ],
+      });
 
       const handler = handlers.get('get-employee-goals')!;
       const result = await handler({ employeeId: '123' });
@@ -162,11 +164,21 @@ describe('employee tools', () => {
     });
 
     it('returns no goals message', async () => {
-      mockedClient.bambooGet.mockResolvedValueOnce([]);
+      mockedClient.bambooGet.mockResolvedValueOnce({ goals: [] });
 
       const handler = handlers.get('get-employee-goals')!;
       const result = await handler({ employeeId: '123' });
       expect(result.content[0].text).toContain('No goals found');
+    });
+
+    it('supports legacy bare array goal responses', async () => {
+      mockedClient.bambooGet.mockResolvedValueOnce([
+        { id: '1', title: 'Legacy goal response' },
+      ]);
+
+      const handler = handlers.get('get-employee-goals')!;
+      const result = await handler({ employeeId: '123' });
+      expect(result.content[0].text).toContain('Legacy goal response');
     });
   });
 });
