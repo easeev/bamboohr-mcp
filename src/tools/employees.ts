@@ -161,7 +161,8 @@ export function registerEmployeeTools(server: McpServer): void {
     async ({ employeeId }: { employeeId: string }) => {
       try {
         const id = employeeIdSchema.parse(employeeId);
-        const goals = await bambooGet<EmployeeGoal[]>(`/performance/employees/${id}/goals`);
+        const response = await bambooGet<EmployeeGoal[] | { goals?: EmployeeGoal[] }>(`/performance/employees/${id}/goals`);
+        const goals = Array.isArray(response) ? response : response.goals ?? [];
         if (!goals || goals.length === 0) {
           return result(`No goals found for employee ${id}.`);
         }

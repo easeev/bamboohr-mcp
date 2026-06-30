@@ -1,7 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { bambooGet, bambooPost, resolveBambooFileUrl } from '../bambooClient.js';
-import { formatErrorForUser } from '../errors.js';
+import { bambooGet, bambooPost, bambooWebGet, resolveBambooFileUrl } from '../bambooClient.js';
+import { categorizeError, ErrorCategory, formatErrorForUser } from '../errors.js';
 import {
   Application,
   ApplicationDetails,
@@ -20,12 +20,38 @@ function reg(server: McpServer, name: string, description: string, params: any, 
 
 type UnknownRecord = Record<string, unknown>;
 
-interface FormattedApplicationComment {
-  id?: string;
-  type: string;
-  author: string;
-  date: string;
-  text: string;
+interface PrivateHiringNotesResponse {
+  meta?: { totalCount?: number };
+  result?: {
+    entities?: {
+      comments?: {
+        allIds?: Array<number | string>;
+        byId?: Record<string, PrivateHiringComment>;
+      };
+      users?: {
+        byId?: Record<string, PrivateHiringUser>;
+      };
+    };
+  };
+}
+
+interface PrivateHiringComment {
+  id?: number | string;
+  text?: string;
+  createdDate?: string;
+  userId?: number | string;
+  author?: number | string;
+}
+
+interface PrivateHiringUser {
+  id?: number | string;
+  name?: string;
+  firstName?: string;
+  lastName?: string;
+}
+
+interface PrivateCandidateApplicationsResponse {
+  result?: Array<{ id?: number | string }>;
 }
 
 function asRecord(value: unknown): UnknownRecord | null {
@@ -40,6 +66,8 @@ function asString(value: unknown): string | undefined {
 
 function stripHtml(value: string): string {
   return value
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/p>/gi, '\n')
     .replace(/<[^>]*>/g, ' ')
     .replace(/&nbsp;/g, ' ')
     .replace(/&amp;/g, '&')
@@ -47,27 +75,15 @@ function stripHtml(value: string): string {
     .replace(/&gt;/g, '>')
     .replace(/&quot;/g, '"')
     .replace(/&#39;/g, "'")
-    .replace(/\s+/g, ' ')
+    .replace(/\r/g, '')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .replace(/[ \t]{2,}/g, ' ')
     .trim();
 }
 
 function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
-}
-
-function authorFromHtml(value: string): string | undefined {
-  const attrMatch = value.match(/data-comment-employee-name="([^"]+)"/);
-  if (attrMatch?.[1]) return stripHtml(attrMatch[1]);
-
-  const stripped = stripHtml(value);
-  return stripped || undefined;
-}
-
-function formatDate(value: string | undefined): string {
-  if (!value) return '';
-
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : date.toISOString();
 }
 
 function userDisplayName(value: unknown): string | undefined {
@@ -82,78 +98,63 @@ function userDisplayName(value: unknown): string | undefined {
   return [firstName, lastName].filter(Boolean).join(' ') || undefined;
 }
 
-function formatApplicationComment(entry: UnknownRecord): FormattedApplicationComment | null {
-  const topLevel = asRecord(entry.topLevel);
-  const source = topLevel || entry;
-  const typeInfo = asRecord(source.type);
-
-  const type = (asString(typeInfo?.type) || asString(source.type) || asString(entry.type) || 'comment').toLowerCase();
-  const text = asString(source.comment)
-    || asString(source.text)
-    || asString(source.body)
-    || asString(source.message)
-    || asString(source.note)
-    || asString(entry.comment)
-    || asString(entry.text)
-    || asString(entry.body)
-    || asString(entry.message)
-    || asString(entry.note);
-
-  if (type !== 'comment' || !text) {
-    return null;
-  }
-
-  const idValue = typeInfo?.id ?? source.id ?? entry.id;
-  const id = typeof idValue === 'number' || typeof idValue === 'string' ? String(idValue) : undefined;
-
-  const author = userDisplayName(typeInfo?.authorUser)
-    || userDisplayName(source.authorUser)
-    || userDisplayName(source.createdBy)
-    || userDisplayName(source.author)
-    || userDisplayName(source.user)
-    || (asString(source.author) ? authorFromHtml(asString(source.author)!) : undefined)
-    || userDisplayName(entry.createdBy)
-    || userDisplayName(entry.author)
-    || userDisplayName(entry.user)
-    || (asString(entry.author) ? authorFromHtml(asString(entry.author)!) : undefined)
-    || 'Unknown';
-
-  const date = formatDate(
-    asString(typeInfo?.createdDatetime)
-    || asString(typeInfo?.changedDatetime)
-    || asString(typeInfo?.ymdt)
-    || asString(source.ymdt)
-    || asString(source.createdAt)
-    || asString(source.created)
-    || asString(source.date)
-    || asString(source.commentDate)
-    || asString(source.timestamp)
-    || asString(entry.createdAt)
-    || asString(entry.created)
-    || asString(entry.date)
-    || asString(entry.commentDate)
-    || asString(entry.timestamp)
-  );
-
-  return { id, type, author, date, text };
+function applicationNotFoundMessage(id: number): string {
+  return `Error [NOT_FOUND]: Application ${id} was not found.\n\n` +
+    `Troubleshooting: get-application-comments uses BambooHR's hiring notes endpoint for comment bodies. BambooHR /hiring/candidates/{id} URLs commonly contain application IDs; pass that URL value as applicationId. Use applicantId only when you already have the applicant/candidate ID from application details/list results.`;
 }
 
-function formatApplicationComments(comments: UnknownRecord[], applicationId: number): string {
-  const formattedComments = comments
-    .map(formatApplicationComment)
-    .filter((comment): comment is FormattedApplicationComment => Boolean(comment));
+function applicantApplicationsNotFoundMessage(applicantId: number): string {
+  return `Error [NOT_FOUND]: No applications found for applicant/candidate ${applicantId}.\n\n` +
+    `Troubleshooting: BambooHR's private hiring applications endpoint did not return applications for applicant/candidate ${applicantId}. If you copied a BambooHR /hiring/candidates/{id} URL, pass that value as applicationId because BambooHR commonly uses application IDs in that URL.`;
+}
 
-  if (formattedComments.length === 0) {
-    return 'No comments found for this application.';
+function isNotFoundError(error: unknown): boolean {
+  return categorizeError(error).category === ErrorCategory.NOT_FOUND;
+}
+
+async function resolveApplicationIdsFromCandidateId(candidateId: number): Promise<number[]> {
+  const response = await bambooWebGet<PrivateCandidateApplicationsResponse>(
+    `/hiring/api/candidates/${candidateId}/applications`
+  );
+  return (Array.isArray(response.result) ? response.result : [])
+    .map((application) => String(application.id ?? '').trim())
+    .filter((id) => /^\d+$/.test(id))
+    .map((id) => parseInt(id, 10));
+}
+
+async function getPrivateApplicationComments(applicationId: number): Promise<PrivateHiringNotesResponse> {
+  return bambooWebGet<PrivateHiringNotesResponse>(
+    `/hiring/api/applications/${applicationId}/notes`,
+    undefined,
+    { skipCache: true }
+  );
+}
+
+function formatPrivateApplicationComments(notes: PrivateHiringNotesResponse, applicationId: number): string {
+  const comments = notes.result?.entities?.comments;
+  const users = notes.result?.entities?.users?.byId || {};
+  const byId = comments?.byId || {};
+  const ids = Array.isArray(comments?.allIds) ? comments.allIds : Object.keys(byId);
+
+  const output = ids
+    .map((id) => {
+      const comment = byId[String(id)];
+      if (!comment || !asString(comment.text)) return null;
+
+      const userId = String(comment.userId ?? comment.author ?? '');
+      const author = userDisplayName(users[userId]) || 'Unknown';
+      const commentId = comment.id ?? id;
+      const date = asString(comment.createdDate);
+      const dateSuffix = date ? ` - ${date}` : '';
+      return `**[comment #${commentId}]** ${author}${dateSuffix}\n${stripHtml(comment.text!)}`;
+    })
+    .filter((entry): entry is string => Boolean(entry));
+
+  if (output.length === 0) {
+    return `No comments found for application ${applicationId}.`;
   }
 
-  const output = formattedComments.map((comment) => {
-    const idSuffix = comment.id ? ` #${comment.id}` : '';
-    const dateSuffix = comment.date ? ` - ${comment.date}` : '';
-    return `**[${comment.type}${idSuffix}]** ${comment.author}${dateSuffix}\n${comment.text}`;
-  }).join('\n\n');
-
-  return `Comments for application ${applicationId} (${formattedComments.length}):\n\n${output}`;
+  return `Comments for application ${applicationId} (${output.length}):\n\n${output.join('\n\n')}`;
 }
 
 function formatApplication(app: Application): string {
@@ -381,21 +382,68 @@ export function registerRecruitingTools(server: McpServer): void {
 
   reg(server,
     'get-application-comments',
-    'Get all comments/notes on a job application. Returns comment text, author, and timestamp.',
+    'Get existing comments/notes on a BambooHR hiring application. Uses BambooHR hiring web API notes endpoint for comment bodies. Use applicationId for BambooHR application IDs, or applicantId for explicit candidate/applicant IDs.',
     {
-      applicationId: z.string().regex(/^\d+$/, 'Application ID must be numeric').describe('The application ID (numeric)'),
+      applicationId: z.string().regex(/^\d+$/, 'Application ID must be numeric').optional().describe('The application ID (numeric). BambooHR /hiring/candidates/{id} URLs commonly use application IDs despite the URL label.'),
+      applicantId: z.string().regex(/^\d+$/, 'Applicant ID must be numeric').optional().describe('Explicit applicant/candidate ID to resolve to application(s). Use this only for applicant.id values from application details/list results.'),
     },
-    async ({ applicationId }: { applicationId: string }) => {
-      try {
-        const id = parseInt(applicationId, 10);
-        const comments = await bambooGet<UnknownRecord[]>(`/applicant_tracking/applications/${id}/comments`);
+    async ({ applicationId, applicantId }: { applicationId?: string; applicantId?: string }) => {
+      if (!applicationId && !applicantId) {
+        return result('Provide applicationId or applicantId.', true);
+      }
+      if (applicationId && applicantId) {
+        return result('Provide either applicationId or applicantId, not both.', true);
+      }
 
-        if (!Array.isArray(comments) || comments.length === 0) {
-          return result('No comments found for this application.');
+      const id = parseInt((applicationId || applicantId)!, 10);
+      try {
+        if (applicantId) {
+          let applicationIds: number[];
+          try {
+            applicationIds = await resolveApplicationIdsFromCandidateId(id);
+          } catch (error) {
+            if (isNotFoundError(error)) {
+              return result(applicantApplicationsNotFoundMessage(id), true);
+            }
+            throw error;
+          }
+          if (applicationIds.length === 0) {
+            return result(applicantApplicationsNotFoundMessage(id), true);
+          }
+
+          const sections: Array<{ text: string; isError: boolean }> = [];
+          for (const resolvedApplicationId of applicationIds) {
+            try {
+              sections.push({
+                text: formatPrivateApplicationComments(
+                  await getPrivateApplicationComments(resolvedApplicationId),
+                  resolvedApplicationId
+                ),
+                isError: false,
+              });
+            } catch (error) {
+              if (isNotFoundError(error)) {
+                sections.push({
+                  text: applicationNotFoundMessage(resolvedApplicationId),
+                  isError: true,
+                });
+                continue;
+              }
+              throw error;
+            }
+          }
+          return result(
+            `Candidate/applicant ${id} application comments:\n\n${sections.map((section) => section.text).join('\n\n---\n\n')}`,
+            sections.some((section) => section.isError)
+          );
         }
 
-        return result(formatApplicationComments(comments, id));
+        return result(formatPrivateApplicationComments(await getPrivateApplicationComments(id), id));
       } catch (error) {
+        if (isNotFoundError(error)) {
+          return result(applicationId ? applicationNotFoundMessage(id) : applicantApplicationsNotFoundMessage(id), true);
+        }
+
         return result(formatErrorForUser(error), true);
       }
     }

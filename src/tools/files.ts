@@ -14,6 +14,10 @@ function reg(server: McpServer, name: string, description: string, params: any, 
   server.tool(name, description, params, handler);
 }
 
+function fileCategories(response: CompanyFileCategory[] | EmployeeFileCategory[] | { categories?: CompanyFileCategory[] | EmployeeFileCategory[] }): CompanyFileCategory[] | EmployeeFileCategory[] {
+  return Array.isArray(response) ? response : response.categories ?? [];
+}
+
 function formatFileCategories(categories: CompanyFileCategory[] | EmployeeFileCategory[]): string {
   return categories
     .map((cat) => {
@@ -32,7 +36,8 @@ export function registerFileTools(server: McpServer): void {
     {},
     async () => {
       try {
-        const categories = await bambooGet<CompanyFileCategory[]>('/files/view');
+        const response = await bambooGet<CompanyFileCategory[] | { categories?: CompanyFileCategory[] }>('/files/view');
+        const categories = fileCategories(response);
         if (!categories || categories.length === 0) {
           return result('No company files found.');
         }
@@ -69,7 +74,8 @@ export function registerFileTools(server: McpServer): void {
     async ({ employeeId }: { employeeId: string }) => {
       try {
         const id = employeeIdSchema.parse(employeeId);
-        const categories = await bambooGet<EmployeeFileCategory[]>(`/employees/${id}/files/view`);
+        const response = await bambooGet<EmployeeFileCategory[] | { categories?: EmployeeFileCategory[] }>(`/employees/${id}/files/view`);
+        const categories = fileCategories(response);
         if (!categories || categories.length === 0) {
           return result(`No files found for employee ${id}.`);
         }

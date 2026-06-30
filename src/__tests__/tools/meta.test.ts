@@ -38,14 +38,30 @@ describe('meta tools', () => {
     });
 
     it('filters by type', async () => {
-      mockedClient.bambooGet.mockResolvedValueOnce([
-        { id: 3, name: 'Vacation', type: 'time_off_type' },
-      ]);
+      mockedClient.bambooGet.mockResolvedValueOnce({
+        timeOffTypes: [
+          { id: '3', name: 'Vacation', units: 'days' },
+        ],
+      });
 
       const handler = handlers.get('get-meta-fields')!;
       const result = await handler({ type: 'time_off_type' });
       expect(result.content[0].text).toContain('Vacation');
-      expect(mockedClient.bambooGet).toHaveBeenCalledWith('/meta/fields/time_off_type');
+      expect(result.content[0].text).toContain('units: days');
+      expect(result.content[0].text).not.toContain('alias: days');
+      expect(mockedClient.bambooGet).toHaveBeenCalledWith('/meta/time_off/types');
+    });
+
+    it('uses the documented time off policies endpoint', async () => {
+      mockedClient.bambooGet.mockResolvedValueOnce([
+        { id: 4, timeOffTypeId: 3, name: 'Vacation Policy', type: 'manual' },
+      ]);
+
+      const handler = handlers.get('get-meta-fields')!;
+      const result = await handler({ type: 'time_off_policy' });
+      expect(result.content[0].text).toContain('Vacation Policy');
+      expect(result.content[0].text).toContain('type: time_off_policy');
+      expect(mockedClient.bambooGet).toHaveBeenCalledWith('/meta/time_off/policies');
     });
 
     it('returns empty message', async () => {
@@ -66,15 +82,20 @@ describe('meta tools', () => {
   describe('get-departments', () => {
     it('returns departments', async () => {
       mockedClient.bambooGet.mockResolvedValueOnce([
-        { id: '1', name: 'Engineering' },
-        { id: '2', name: 'Sales', parentId: '1' },
+        {
+          name: 'Department',
+          options: [
+            { id: '1', name: 'Engineering', archived: 'no' },
+            { id: '2', name: 'Sales', archived: 'yes' },
+          ],
+        },
       ]);
 
       const handler = handlers.get('get-departments')!;
       const result = await handler({});
       expect(result.content[0].text).toContain('Engineering');
-      expect(result.content[0].text).toContain('Sales');
-      expect(result.content[0].text).toContain('parent: 1');
+      expect(result.content[0].text).not.toContain('Sales');
+      expect(mockedClient.bambooGet).toHaveBeenCalledWith('/meta/lists', { format: 'json' });
     });
   });
 
